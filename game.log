@@ -1,26 +1,6 @@
-2025/05/01 19:54:31.975867 ==== Log (v7.3 - Correct Formatting) ====
-2025/05/01 19:54:31.976399 Iniciando loop principal do Ebitengine...
-2025/05/01 19:54:51.167702 Decodificação JSON OK. 7 trilhos lidos.
-2025/05/01 19:54:51.167702   -> Coords Mundo 1º trilho carregado: (132.0, 118.0) -> (787.0, 119.0)
-2025/05/01 19:54:51.167702 Malha carregada e câmera resetada: 'D:\malha1.json' (7 trilhos)
-2025/05/01 19:55:40.921014 Cor do trilho 8 -> Verde
-2025/05/01 19:56:05.005529 Espessura: 6.0 px
-2025/05/01 19:56:05.220611 Espessura: 7.0 px
-2025/05/01 19:56:05.387535 Espessura: 8.0 px
-2025/05/01 19:56:05.602927 Espessura: 9.0 px
-2025/05/01 19:56:05.804597 Espessura: 10.0 px
-2025/05/01 19:56:06.005671 Espessura: 11.0 px
-2025/05/01 19:56:06.284450 Espessura: 12.0 px
-2025/05/01 19:56:06.485293 Espessura: 13.0 px
-2025/05/01 19:56:06.707042 Espessura: 14.0 px
-2025/05/01 19:56:07.005375 Espessura: 15.0 px
-2025/05/01 19:56:07.699625 Espessura: 16.0 px
-2025/05/01 19:56:08.067675 Espessura: 17.0 px
-2025/05/01 19:56:08.609221 Espessura: 18.0 px
-2025/05/01 19:56:27.836746 Salvo: 'D:\malha1.json' (10 trilhos)
-2025/05/01 19:57:55.748569 Fundo: Preto
-2025/05/01 19:57:57.803145 Fundo: Branco Gelo
-2025/05/01 19:58:03.934263 Fundo: Preto
-2025/05/01 19:58:18.868715 Cor do trilho 10 -> Azul
-2025/05/01 19:58:26.321914 Salvo: 'D:\malha1.json' (11 trilhos)
-2025/05/01 19:58:32.617243 ==== Programa encerrado ====
+21:46:41.849826 05/05/2025 ==== Log (v8.4 - Final Formatting Fix 2) ====
+21:46:41.849826 05/05/2025 Iniciando loop...
+21:46:49.809862 05/05/2025 Decodificação JSON OK. 22 trilhos lidos.
+21:46:49.809862 05/05/2025   -> Coords Mundo 1º trilho carregado: (0.0, 0.0) -> (0.0, 0.0)
+21:46:49.809862 05/05/2025 Malha carregada e câmera resetada (X, Y): 'D:\malhateste.json' (22 trilhos)
+21:46:53.241800 05/05/2025 ==== Fim ====
