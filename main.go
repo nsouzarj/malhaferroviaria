@@ -12,13 +12,16 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/image/font" // Necessário para font.Face
+	"golang.org/x/image/font/basicfont"
+
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
-	"github.com/hajimehoshi/ebiten/v2/text"
+	"github.com/hajimehoshi/ebiten/v2/text" // text.Draw agora precisa de text.Face
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	"github.com/sqweek/dialog"
-	"golang.org/x/image/font/basicfont"
+	// Removido import de golang.org/x/image/font/basicfont diretamente, pois text.Face espera um font.Face
 )
 
 // --- Logger Customizado ---
@@ -37,6 +40,8 @@ const (
 	tooltipPadding       = 4
 	minZoom              = 0.1
 	maxZoom              = 10.0
+	helpTextPadding      = 20  // Padding para o texto de ajuda
+	helpLineSpacingFactor = 1.5 // Fator para aumentar o espaçamento entre linhas
 )
 
 // --- Tipos de Elementos ---
@@ -95,6 +100,7 @@ type Game struct {
 	popupOptions        []PopupOption
 	hoveredElementIndex, selectedElementIndex, movingElementIndex int
 	movingElementOffsetX, movingElementOffsetY float64
+	helpTextFace        font.Face // Face para o texto de ajuda
 }
 
 // --- Funções de Inicialização e Logger ---
@@ -116,7 +122,7 @@ func NewGame() *Game {
 		logOutput = os.Stderr
 	}
 	fileLogger = log.New(logOutput, "", log.Ltime|log.Lmicroseconds)
-	logln("==== Log (v9.17.10 - Tampas Verticais para Via Cheia e Vazada) ====") // Version increment
+	logln("==== Log (v9.17.11 - Help Text Spacing Increased) ====") // Version increment
 	log.SetOutput(logOutput)
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	whiteImg := ebiten.NewImage(1, 1)
@@ -133,6 +139,13 @@ func NewGame() *Game {
 		ebiten.Key3: "Amarelo", ebiten.Key4: "Verde",
 		ebiten.Key5: "Turquesa",
 	}
+
+	// Configurar a face para o texto de ajuda com maior espaçamento de linha
+	// basicfont.Face7x13.Height é 13.
+	// A altura da linha padrão para text.Draw é a altura da face.
+	// Para aumentar o espaçamento, precisamos usar text.DrawWithOptions ou desenhar linha por linha.
+	// A forma mais simples é iterar pelas linhas do helpText.
+
 	return &Game{
 		elementos:         []Elemento{}, proximoElementoID: 1, elementoAtualTipo: ElementoViaReta,
 		currentColor:      palette[ebiten.Key1], thickness: 8.0,
@@ -141,6 +154,7 @@ func NewGame() *Game {
 		cameraOffsetX:     0.0, cameraOffsetY: 0.0, cameraZoom: 1.0,
 		backgroundColor:   color.RGBA{R: 0, G: 0, B: 0, A: 255}, showHelp: false, viaCheiaDefault: false,
 		popupVisible:      false, selectedElementIndex: -1, hoveredElementIndex: -1, movingElementIndex: -1,
+		helpTextFace:      basicfont.Face7x13, // Usaremos a face padrão, mas controlaremos o espaçamento
 	}
 }
 func logf(format string, v ...interface{}) { if fileLogger != nil { now := time.Now(); dateStr := now.Format("01/02/2006"); fileLogger.Output(2, fmt.Sprintf(dateStr+" "+format, v...)) } }
@@ -322,7 +336,7 @@ ADICIONAR:
                 (Padrão: Barra Vert. L=30, Traço E=3 Unid. Mundo)
    - Chave Simples: Desenha um circulo.
                     Raio em Unid. Mundo.
-                    (Padrão: Raio R=10 Unid. Mundo)
+                    (Padrao: Raio R=10 Unid. Mundo)
 
 MOVER ELEMENTO:
  - Clique esquerdo sobre um elemento e arraste.
@@ -339,7 +353,7 @@ NAVEGACAO:
 VIA RETA (Proximo a ser adicionado):
  1-5: Mudar Cor Padrao
  +, - (Numpad): Aumentar/Diminuir Bitola Padrao (Unid. Mundo)
- V: Alternar Modo Padra1o (Cheia / Vazada)
+ V: Alternar Modo Padrao (Cheia / Vazada)
 
 COR DE FUNDO: F2: Cinza Escuro | F3: Cinza Azulado | F4: Branco Gelo
 ARQUIVO: S: Salvar | L: Carregar | C: Limpar Tudo
@@ -471,7 +485,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 	}
 
-	if g.popupVisible { drawPopupX, drawPopupY := g.calculatePopupDrawPosition(); popupDrawHeight := 0; if len(g.popupOptions) > 0 { maxYRel := 0; for _, opt := range g.popupOptions { relY := opt.Rect.Max.Y - g.popupY; if relY > maxYRel { maxYRel = relY } }; popupDrawHeight = maxYRel + popupPadding }; if popupDrawHeight > 0 { vector.DrawFilledRect(screen, float32(drawPopupX), float32(drawPopupY), float32(popupWidth), float32(popupDrawHeight), color.RGBA{R:50,G:50,B:50,A:220}, false) }; offsetX := drawPopupX - g.popupX; offsetY := drawPopupY - g.popupY; for _, option := range g.popupOptions { optionDrawRect := option.Rect.Add(image.Pt(offsetX, offsetY)); if option.Color != nil { vector.DrawFilledRect(screen, float32(optionDrawRect.Min.X), float32(optionDrawRect.Min.Y), float32(optionDrawRect.Dx()), float32(optionDrawRect.Dy()), *option.Color, false); vector.StrokeRect(screen, float32(optionDrawRect.Min.X), float32(optionDrawRect.Min.Y), float32(optionDrawRect.Dx()), float32(optionDrawRect.Dy()), 1, color.White, false) }; if option.Label != "" { tb := text.BoundString(basicfont.Face7x13, option.Label); tx := optionDrawRect.Min.X + (optionDrawRect.Dx()-tb.Dx())/2; ty := optionDrawRect.Min.Y + (optionDrawRect.Dy()+tb.Dy())/2 - 2; text.Draw(screen, option.Label, basicfont.Face7x13, tx, ty, color.White) } } }
+	if g.popupVisible { drawPopupX, drawPopupY := g.calculatePopupDrawPosition(); popupDrawHeight := 0; if len(g.popupOptions) > 0 { maxYRel := 0; for _, opt := range g.popupOptions { relY := opt.Rect.Max.Y - g.popupY; if relY > maxYRel { maxYRel = relY } }; popupDrawHeight = maxYRel + popupPadding }; if popupDrawHeight > 0 { vector.DrawFilledRect(screen, float32(drawPopupX), float32(drawPopupY), float32(popupWidth), float32(popupDrawHeight), color.RGBA{R:50,G:50,B:50,A:220}, false) }; offsetX := drawPopupX - g.popupX; offsetY := drawPopupY - g.popupY; for _, option := range g.popupOptions { optionDrawRect := option.Rect.Add(image.Pt(offsetX, offsetY)); if option.Color != nil { vector.DrawFilledRect(screen, float32(optionDrawRect.Min.X), float32(optionDrawRect.Min.Y), float32(optionDrawRect.Dx()), float32(optionDrawRect.Dy()), *option.Color, false); vector.StrokeRect(screen, float32(optionDrawRect.Min.X), float32(optionDrawRect.Min.Y), float32(optionDrawRect.Dx()), float32(optionDrawRect.Dy()), 1, color.White, false) }; if option.Label != "" { tb := text.BoundString(g.helpTextFace, option.Label); tx := optionDrawRect.Min.X + (optionDrawRect.Dx()-tb.Dx())/2; ty := optionDrawRect.Min.Y + (optionDrawRect.Dy()+tb.Dy())/2 - 2; text.Draw(screen, option.Label, g.helpTextFace, tx, ty, color.White) } } }
 
 	elementTypeStr := ""
 	switch g.elementoAtualTipo {
@@ -483,9 +497,26 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	viaModeStr:="Vazada"; if g.viaCheiaDefault{viaModeStr="Cheia"}
 	metersPerScreenPixel := (1.0/pixelsPerMeter)/g.cameraZoom
 	statusText := fmt.Sprintf("Cam:%.0f,%.0f(Z:%.2fx)|Esc:1px=%.1fm|Tipo:%s|Via[V]:%s\nFundo[F2-4]|Scroll[Setas]|+/-:BitolaVR(%.0f WU)|S/L:Arq|C:Limpar|ESC:Sair",g.cameraOffsetX,g.cameraOffsetY,g.cameraZoom,metersPerScreenPixel,elementTypeStr,viaModeStr,g.thickness)
-	ebitenutil.DebugPrint(screen,statusText)
+	ebitenutil.DebugPrint(screen,statusText) // Usa a fonte padrão do DebugPrint
 
-	if g.showHelp { vector.DrawFilledRect(screen,0,0,float32(g.screenWidth),float32(g.screenHeight),color.RGBA{R:0,G:0,B:0,A:200},false); text.Draw(screen,helpText,basicfont.Face7x13,20,20,color.White) }
+	if g.showHelp {
+		vector.DrawFilledRect(screen, 0, 0, float32(g.screenWidth), float32(g.screenHeight), color.RGBA{R: 0, G: 0, B: 0, A: 200}, false)
+		
+		lines := strings.Split(helpText, "\n")
+		currentY := helpTextPadding
+		// A altura da linha para basicfont.Face7x13 é 13.
+		// Vamos usar um espaçamento de linha maior.
+		lineHeight := int(float64(g.helpTextFace.Metrics().Height.Ceil()) * helpLineSpacingFactor) 
+		if lineHeight < g.helpTextFace.Metrics().Height.Ceil() { // Garante que seja pelo menos a altura original
+			lineHeight = g.helpTextFace.Metrics().Height.Ceil()
+		}
+
+
+		for _, line := range lines {
+			text.Draw(screen, line, g.helpTextFace, helpTextPadding, currentY, color.White)
+			currentY += lineHeight
+		}
+	}
 }
 
 // Layout
@@ -540,7 +571,7 @@ func drawThickLine(screen *ebiten.Image, whitePixel *ebiten.Image, x1, y1, x2, y
 func main() {
 	gameInstance := NewGame()
 	ebiten.SetWindowSize(gameInstance.screenWidth, gameInstance.screenHeight)
-	ebiten.SetWindowTitle("Editor de Vias (v9.17.10 - Tampas Verticais para Via Cheia e Vazada)") // Version increment
+	ebiten.SetWindowTitle("Editor de Vias (v9.17.11 - Help Text Spacing Increased)") // Version increment
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	logln("Iniciando loop...")
 	if err := ebiten.RunGame(gameInstance); err != nil {
