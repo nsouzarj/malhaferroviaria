@@ -1,527 +1,550 @@
 package main
 
 import (
-	// Pacotes padrão do Go
-	"encoding/json" // Para codificar/decodificar dados em formato JSON (salvar/carregar)
-	"fmt"           // Para formatação de strings (usado em logs e UI)
-	"image"         // Para manipulação básica de imagens (usado em retângulos do popup)
-	"image/color"   // Para definições de cores
-	"io"            // Necessário para configurar múltiplos outputs de log (arquivo e console)
-	"log"           // Para registrar mensagens (erros, informações)
-	"math"          // Para funções matemáticas (Sqrt, Pow, Max, Min, IsNaN, IsInf)
-	"os"            // Para interação com o sistema operacional (arquivos)
-	"strings"       // Para manipulação de strings (usado em HasSuffix)
-	"time"          // Importar pacote time para formatação de data customizada
+	"encoding/json"
+	"fmt"
+	"image"
+	"image/color"
+	"io"
+	"log"
+	"math"
+	"os"
+	"strings"
+	"time"
 
-	// Biblioteca Ebitengine e seus submódulos
-	"github.com/hajimehoshi/ebiten/v2"          // Núcleo do Ebitengine
-	"github.com/hajimehoshi/ebiten/v2/ebitenutil" // Utilitários (DebugPrint)
-	"github.com/hajimehoshi/ebiten/v2/inpututil"  // Utilitários para entrada (teclado, mouse)
-	"github.com/hajimehoshi/ebiten/v2/text"      // Para desenhar texto na tela
-	"github.com/hajimehoshi/ebiten/v2/vector"    // Para desenho vetorial (retângulos, círculos)
-
-	// Biblioteca externa para diálogos de arquivo nativos
+	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	"github.com/hajimehoshi/ebiten/v2/text"
+	"github.com/hajimehoshi/ebiten/v2/vector"
 	"github.com/sqweek/dialog"
-
-	// Fonte básica para texto simples
 	"golang.org/x/image/font/basicfont"
 )
 
 // --- Logger Customizado ---
-
-// fileLogger é uma variável global para nosso logger customizado.
-// Ele será configurado para escrever no arquivo de log e/ou console com o formato de data desejado.
 var fileLogger *log.Logger
 
 // --- Constantes Globais ---
 const (
-	// pixelsPerMeter define a escala do mundo: quantos pixels na tela representam 1 metro no mundo.
-	// 0.01 significa que 1 pixel = 100 metros. Mudar isso afeta o cálculo de LengthMeters.
-	pixelsPerMeter = 0.01
-
-	// cameraScrollSpeed define a velocidade de movimento da câmera (em pixels por frame).
-	cameraScrollSpeed = 5.0
-
-	// Dimensões e aparência do menu popup contextual.
-	popupWidth           = 100 // Largura fixa do popup.
-	popupOptionHeight    = 20  // Altura padrão para opções de texto como "Apagar".
-	popupPadding         = 5   // Espaçamento interno nas bordas do popup.
-	popupColorSquareSize = 16  // Tamanho dos quadrados de seleção de cor.
-
-	// hitThreshold é a distância máxima (em pixels na tela) para considerar um clique
-	// como sendo "em cima" de um trilho para abrir o popup.
-	hitThreshold = 8.0
-
-	// nodeRadiusFactor determina o raio dos nós (círculos) nas pontas dos trilhos,
-	// como um múltiplo da espessura do trilho (dividido por 2).
-	nodeRadiusFactor = 1.5
-
-	// nodeOutlineWidth define a espessura da borda desenhada ao redor dos nós.
-	nodeOutlineWidth = 1.0
-
-	// tooltipPadding define a margem interna do balão de dica (tooltip).
-	tooltipPadding = 4
+	pixelsPerMeter       = 0.01
+	cameraScrollSpeed    = 5.0
+	popupWidth           = 150
+	popupOptionHeight    = 20
+	popupPadding         = 5
+	popupColorSquareSize = 16
+	hitThreshold         = 8.0
+	railStrokeWidth      = 1.0
+	tooltipPadding       = 4
+	minZoom              = 0.1
+	maxZoom              = 10.0
 )
 
-// --- Estruturas de Dados ---
+// --- Tipos de Elementos ---
+type ElementType int
 
-// Track representa um único segmento de trilho na malha.
-type Track struct {
-	// Coordenadas X e Y dos pontos inicial e final do trilho no *MUNDO*.
-	// Letras maiúsculas são essenciais para exportação (e salvamento em JSON).
-	// Tags `json:"..."` definem como os campos serão chamados no arquivo JSON.
-	X1 float64 `json:"x1"`
-	Y1 float64 `json:"y1"`
-	X2 float64 `json:"x2"`
-	Y2 float64 `json:"y2"`
+const (
+	ElementoViaReta ElementType = iota
+	ElementoCircuitoVia
+	ElementoChaveSimples
+)
 
-	// Cor do trilho.
-	Color color.RGBA `json:"color"`
-
-	// Espessura visual do trilho (em pixels na tela).
-	Thickness float64 `json:"thickness"`
-
-	// Comprimento calculado do trilho em metros, baseado na escala.
-	LengthMeters float64 `json:"lengthMeters"`
+// --- Estrutura Elemento ---
+type Elemento struct {
+	Tipo         ElementType `json:"tipo"`
+	ID           int         `json:"id"`
+	X            float64     `json:"x"`
+	Y            float64     `json:"y"`
+	Comprimento  float64     `json:"comprimento"`
+	Largura      float64     `json:"largura"`
+	Rotacao      float64     `json:"rotacao"`
+	Cor          color.RGBA  `json:"cor"`
+	Espessura    float64     `json:"espessura"`
+	ModoCheio    bool        `json:"modoCheio,omitempty"`
+	Estado       string      `json:"estado,omitempty"`
+	OrientacaoTC string      `json:"orientacaoTC,omitempty"`
 }
 
-// PopupOption representa uma opção clicável no menu popup.
+// --- Estrutura PopupOption ---
 type PopupOption struct {
-	// Texto exibido (se houver).
-	Label string
-	// Área retangular clicável, relativa à posição *original* do popup.
-	Rect image.Rectangle
-	// Ponteiro para a cor (se for uma amostra de cor).
-	Color *color.RGBA
-	// Função a ser executada quando a opção é clicada.
+	Label  string
+	Rect   image.Rectangle
+	Color  *color.RGBA
 	Action func()
 }
 
-// Game contém todo o estado da aplicação.
+// --- Estrutura Game ---
 type Game struct {
-	tracks             []Track      // Slice com todos os trilhos.
-	startX, startY     float64      // Coordenadas (MUNDO) de início do desenho atual.
-	drawing            bool         // Flag: true se está desenhando um novo trilho.
-	currentColor       color.RGBA   // Cor selecionada para novos trilhos.
-	thickness          float64      // Espessura selecionada para novos trilhos (pixels).
-	screenWidth        int          // Largura atual da janela (pixels).
-	screenHeight       int          // Altura atual da janela (pixels).
-	whitePixel         *ebiten.Image // Textura 1x1 branca para desenho.
-	colorPalette       map[ebiten.Key]color.RGBA // Mapa Tecla -> Cor (para seleção).
-	colorNames         map[ebiten.Key]string    // Mapa Tecla -> Nome da Cor.
-	cameraOffsetX      float64      // Deslocamento horizontal da câmera (MUNDO).
-	cameraOffsetY      float64      // Deslocamento vertical da câmera (MUNDO).
-	backgroundColor    color.RGBA   // Cor de fundo atual.
-	popupVisible       bool         // Flag: true se o popup está visível.
-	popupX, popupY     int          // Coordenadas (TELA) originais onde o popup foi aberto.
-	selectedTrackIndex int          // Índice do trilho selecionado para o popup (-1 se nenhum).
-	popupOptions       []PopupOption // Opções atuais do popup.
-	hoveredTrackIndex  int          // Índice do trilho sob o mouse (-1 se nenhum).
+	elementos           []Elemento
+	proximoElementoID   int
+	elementoAtualTipo   ElementType
+	startX, startY      float64
+	drawingVia          bool
+	currentColor        color.RGBA
+	thickness           float64
+	screenWidth         int
+	screenHeight        int
+	whitePixel          *ebiten.Image
+	colorPalette        map[ebiten.Key]color.RGBA
+	colorNames          map[ebiten.Key]string
+	cameraOffsetX, cameraOffsetY, cameraZoom float64
+	backgroundColor     color.RGBA
+	showHelp            bool
+	viaCheiaDefault     bool
+	popupVisible        bool
+	popupX, popupY      int
+	popupOptions        []PopupOption
+	hoveredElementIndex, selectedElementIndex, movingElementIndex int
+	movingElementOffsetX, movingElementOffsetY float64
 }
 
 // --- Funções de Inicialização e Logger ---
-
-// NewGame inicializa e retorna o estado inicial do jogo.
 func NewGame() *Game {
-	// Determina tamanho da janela.
 	monitorWidth, monitorHeight := ebiten.Monitor().Size()
 	if monitorWidth <= 0 || monitorHeight <= 0 {
 		monitorWidth, monitorHeight = 1024, 768
 	} else {
 		monitorWidth, monitorHeight = int(float64(monitorWidth)*0.9), int(float64(monitorHeight)*0.9)
 	}
-	fmt.Printf("Tamanho: %dx%d | Escala: 1 pixel = %.0f metros\n", monitorWidth, monitorHeight, 1.0/pixelsPerMeter)
-
-	// Configura o logger para arquivo e console.
+	fmt.Printf("Tamanho: %dx%d | Escala Base: 1 pixel (world unit) = %.0f metros (zoom 1.0x)\n", monitorWidth, monitorHeight, 1.0/pixelsPerMeter)
 	logFile, err := os.OpenFile("game.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_TRUNC, 0660)
 	var logOutput io.Writer
 	if err == nil {
-		logOutput = io.MultiWriter(os.Stderr, logFile) // Loga em ambos.
-		fmt.Println("Log configurado para arquivo 'game.log' e console.")
+		logOutput = io.MultiWriter(os.Stderr, logFile)
+		fmt.Println("Log: 'game.log' e console.")
 	} else {
-		fmt.Fprintf(os.Stderr, "Erro ao abrir arquivo de log (%v), logando apenas no console.\n", err)
-		logOutput = os.Stderr // Loga apenas no console.
+		fmt.Fprintf(os.Stderr, "Erro log (%v), usando console.\n", err)
+		logOutput = os.Stderr
 	}
-
-	// Cria nosso logger customizado sem data padrão, mas com tempo/microssegundos.
 	fileLogger = log.New(logOutput, "", log.Ltime|log.Lmicroseconds)
-	logln("==== Log (v8.4 - Final Formatting Fix 2) ====") // Primeira mensagem usando logln.
-
-	// Configura o logger padrão global por segurança (útil para libs externas talvez).
+	logln("==== Log (v9.17.10 - Tampas Verticais para Via Cheia e Vazada) ====") // Version increment
 	log.SetOutput(logOutput)
-	log.SetFlags(log.Ltime | log.Lmicroseconds) // Sem data padrão.
-
-	// Cria a textura 1x1 branca.
+	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	whiteImg := ebiten.NewImage(1, 1)
 	whiteImg.Fill(color.White)
-
-	// Define paleta de cores e nomes.
-	palette := map[ebiten.Key]color.RGBA{ebiten.Key1: {255, 0, 0, 255}, ebiten.Key2: {0, 0, 255, 255}, ebiten.Key3: {255, 255, 0, 255}, ebiten.Key4: {0, 255, 0, 255}}
-	names := map[ebiten.Key]string{ebiten.Key1: "Vermelho", ebiten.Key2: "Azul", ebiten.Key3: "Amarelo", ebiten.Key4: "Verde"}
-	initialColorKey := ebiten.Key1
-
-	// Retorna a struct Game preenchida com os valores iniciais.
+	palette := map[ebiten.Key]color.RGBA{
+		ebiten.Key1: {R: 255, G: 0, B: 0, A: 255},
+		ebiten.Key2: {R: 0, G: 0, B: 255, A: 255},
+		ebiten.Key3: {R: 255, G: 255, B: 0, A: 255},
+		ebiten.Key4: {R: 0, G: 255, B: 0, A: 255},
+		ebiten.Key5: {R: 0, G: 206, B: 209, A: 255},
+	}
+	names := map[ebiten.Key]string{
+		ebiten.Key1: "Vermelho", ebiten.Key2: "Azul",
+		ebiten.Key3: "Amarelo", ebiten.Key4: "Verde",
+		ebiten.Key5: "Turquesa",
+	}
 	return &Game{
-		tracks:             []Track{},
-		currentColor:       palette[initialColorKey],
-		thickness:          5.0,
-		screenWidth:        monitorWidth,
-		screenHeight:       monitorHeight,
-		whitePixel:         whiteImg,
-		colorPalette:       palette,
-		colorNames:         names,
-		cameraOffsetX:      0.0,
-		cameraOffsetY:      0.0, // Inicializa offset Y.
-		backgroundColor:    color.RGBA{0, 0, 0, 255},
-		popupVisible:       false,
-		selectedTrackIndex: -1,
-		hoveredTrackIndex:  -1,
-		popupOptions:       []PopupOption{},
+		elementos:         []Elemento{}, proximoElementoID: 1, elementoAtualTipo: ElementoViaReta,
+		currentColor:      palette[ebiten.Key1], thickness: 8.0,
+		screenWidth:       monitorWidth, screenHeight: monitorHeight, whitePixel: whiteImg,
+		colorPalette:      palette, colorNames: names,
+		cameraOffsetX:     0.0, cameraOffsetY: 0.0, cameraZoom: 1.0,
+		backgroundColor:   color.RGBA{R: 0, G: 0, B: 0, A: 255}, showHelp: false, viaCheiaDefault: false,
+		popupVisible:      false, selectedElementIndex: -1, hoveredElementIndex: -1, movingElementIndex: -1,
 	}
 }
+func logf(format string, v ...interface{}) { if fileLogger != nil { now := time.Now(); dateStr := now.Format("01/02/2006"); fileLogger.Output(2, fmt.Sprintf(dateStr+" "+format, v...)) } }
+func logln(v ...interface{}) { if fileLogger != nil { now := time.Now(); dateStr := now.Format("01/02/2006"); fileLogger.Output(2, dateStr+" "+strings.TrimRight(fmt.Sprintln(v...), "\n")) } }
 
-// logf formata e escreve uma mensagem no log com data MM/DD/YYYY.
-func logf(format string, v ...interface{}) {
-	if fileLogger == nil { return } // Segurança: não faz nada se o logger não foi criado.
-	now := time.Now()
-	dateStr := now.Format("01/02/2006") // Formato MM/DD/YYYY.
-	// Cria a mensagem final prefixando a data.
-	finalMessage := fmt.Sprintf(dateStr+" "+format, v...)
-	// Usa fileLogger.Output para que as flags Ltime|Lmicroseconds sejam adicionadas.
-	// Calldepth 2 aponta para a linha que chamou logf, não a linha dentro de logf.
-	fileLogger.Output(2, finalMessage)
-}
-
-// logln formata e escreve uma mensagem (com nova linha) no log com data MM/DD/YYYY.
-func logln(v ...interface{}) {
-	if fileLogger == nil { return }
-	now := time.Now()
-	dateStr := now.Format("01/02/2006") // Formato MM/DD/YYYY.
-	// Usa Sprintln para formatar os argumentos como faria log.Println.
-	msgStr := fmt.Sprintln(v...)
-	// Monta a mensagem, removendo a nova linha extra de Sprintln.
-	finalMessage := dateStr + " " + strings.TrimRight(msgStr, "\n")
-	fileLogger.Output(2, finalMessage) // Usa Output para adicionar tempo/microssegundos.
-}
-
-// --- Funções Helper ---
-
-// screenToWorld converte coordenadas da Tela para o Mundo.
+// --- Funções Helper de Câmera e Coordenadas ---
 func (g *Game) screenToWorld(screenX, screenY int) (float64, float64) {
-	worldX := float64(screenX) + g.cameraOffsetX
-	worldY := float64(screenY) + g.cameraOffsetY // Inclui offset Y
-	return worldX, worldY
+	csX := float64(screenX) - float64(g.screenWidth)/2.0; csY := float64(screenY) - float64(g.screenHeight)/2.0
+	return (csX / g.cameraZoom) + g.cameraOffsetX, (csY / g.cameraZoom) + g.cameraOffsetY
 }
-
-// worldToScreen converte coordenadas do Mundo para a Tela.
 func (g *Game) worldToScreen(worldX, worldY float64) (float32, float32) {
-	screenX := float32(worldX - g.cameraOffsetX)
-	screenY := float32(worldY - g.cameraOffsetY) // Inclui offset Y
-	return screenX, screenY
+	rwX := worldX - g.cameraOffsetX; rwY := worldY - g.cameraOffsetY
+	return float32(rwX*g.cameraZoom + float64(g.screenWidth)/2.0), float32(rwY*g.cameraZoom + float64(g.screenHeight)/2.0)
+}
+func calculateLengthMeters(x1,y1,x2,y2 float64) float64 {
+	dx:=x2-x1; dy:=y2-y1
+	worldUnitsLen:=math.Sqrt(dx*dx+dy*dy)
+	if pixelsPerMeter<=0 {return worldUnitsLen}
+	return worldUnitsLen / pixelsPerMeter
 }
 
-// calculateLengthMeters calcula o comprimento em metros.
-func calculateLengthMeters(x1, y1, x2, y2 float64) float64 {
-	dx := x2 - x1; dy := y2 - y1; pixelLength := math.Sqrt(dx*dx + dy*dy); if pixelsPerMeter <= 0 { return pixelLength }; return pixelLength / pixelsPerMeter }
+// --- Salvar/Carregar Elementos ---
+func (g *Game) saveElements() error { savePath, err := dialog.File().Filter("JSON Malha", "json").Title("Salvar Malha").Save(); if err != nil { if err == dialog.ErrCancelled { logln("Salvar cancelado."); return nil }; logf("ERRO diálogo salvar: %v", err); return err }; if len(savePath) == 0 { logln("Salvar cancelado (caminho vazio)."); return nil }; if !strings.HasSuffix(strings.ToLower(savePath), ".json") { savePath += ".json" }; file, err := os.Create(savePath); if err != nil { logf("ERRO criar '%s': %v", savePath, err); return err }; defer file.Close(); encoder := json.NewEncoder(file); encoder.SetIndent("", "  "); if err = encoder.Encode(g.elementos); err != nil { logf("ERRO codificar Elementos JSON '%s': %v", savePath, err); return err }; logf("Salvo: '%s' (%d elementos)", savePath, len(g.elementos)); return nil }
+func (g *Game) loadElements() error { loadPath, err := dialog.File().Filter("JSON Malha", "json").Title("Carregar Malha").Load(); if err != nil { if err == dialog.ErrCancelled { logln("Carregar cancelado."); return nil }; logf("ERRO diálogo carregar: %v", err); return err }; if len(loadPath) == 0 { logln("Carregar cancelado (caminho vazio)."); return nil }; file, err := os.Open(loadPath); if err != nil { logf("ERRO abrir '%s': %v", loadPath, err); return err }; defer file.Close(); var loadedElements []Elemento; decoder := json.NewDecoder(file); if err = decoder.Decode(&loadedElements); err != nil { logf("ERRO decodificar Elementos JSON '%s': %v", loadPath, err); return err }; logf("Decodificação JSON OK. %d elementos lidos.", len(loadedElements)); g.elementos = loadedElements; g.proximoElementoID = 0; for _, el := range g.elementos { if el.ID >= g.proximoElementoID { g.proximoElementoID = el.ID + 1 } }; if g.proximoElementoID == 0 { g.proximoElementoID = 1 }; g.cameraOffsetX = 0; g.cameraOffsetY = 0; g.cameraZoom = 1.0; g.popupVisible = false; g.selectedElementIndex = -1; g.movingElementIndex = -1; g.hoveredElementIndex = -1; logf("Malha carregada, ID=%d, câmera resetada: '%s'", g.proximoElementoID, loadPath); return nil }
 
-// saveTracks salva os trilhos em um arquivo JSON escolhido pelo usuário.
-func (g *Game) saveTracks() error {
-	savePath, err := dialog.File().Filter("JSON Malha", "json").Title("Salvar Malha Ferroviária").Save()
-	if err != nil { if err == dialog.ErrCancelled { logln("Salvar cancelado."); return nil }; logf("ERRO diálogo salvar: %v", err); return err }
-	if len(savePath) == 0 { logln("Salvar cancelado (caminho vazio)."); return nil }
-	if !strings.HasSuffix(strings.ToLower(savePath), ".json") { savePath += ".json" }
-	file, err := os.Create(savePath); if err != nil { logf("ERRO criar '%s': %v", savePath, err); return err }; defer file.Close()
-	encoder := json.NewEncoder(file); encoder.SetIndent("", "  ")
-	err = encoder.Encode(g.tracks)
-	if err != nil { logf("ERRO codificar JSON '%s': %v", savePath, err); return err }
-	logf("Salvo: '%s' (%d trilhos)", savePath, len(g.tracks))
-	return nil
-}
+// --- Hit Testing ---
+func pointSegmentDistance(px,py,ax,ay,bx,by float64) float64 { dx, dy := bx-ax, by-ay; lengthSq := dx*dx + dy*dy; if lengthSq == 0 { return math.Sqrt(math.Pow(px-ax, 2) + math.Pow(py-ay, 2)) }; t := ((px-ax)*dx + (py-ay)*dy) / lengthSq; t = math.Max(0, math.Min(1, t)); closestX := ax + t*dx; closestY := ay + t*dy; return math.Sqrt(math.Pow(px-closestX, 2) + math.Pow(py-closestY, 2)) }
+func (g *Game) findClosestElement(worldX, worldY float64) int {
+	closestIndex := -1
+	minDistScreen := hitThreshold
 
-// loadTracks carrega os trilhos de um arquivo JSON escolhido pelo usuário.
-func (g *Game) loadTracks() error {
-	loadPath, err := dialog.File().Filter("JSON Malha", "json").Title("Carregar Malha Ferroviária").Load()
-	if err != nil { if err == dialog.ErrCancelled { logln("Carregar cancelado."); return nil }; logf("ERRO diálogo carregar: %v", err); return err }
-	if len(loadPath) == 0 { logln("Carregar cancelado (caminho vazio)."); return nil }
-	file, err := os.Open(loadPath); if err != nil { logf("ERRO abrir '%s': %v", loadPath, err); return err }; defer file.Close()
-	var loadedTracks []Track; decoder := json.NewDecoder(file); err = decoder.Decode(&loadedTracks)
-	if err != nil { logf("ERRO decodificar JSON '%s': %v", loadPath, err); return err }
-	logf("Decodificação JSON OK. %d trilhos lidos.", len(loadedTracks))
-	if len(loadedTracks) > 0 { logf("  -> Coords Mundo 1º trilho carregado: (%.1f, %.1f) -> (%.1f, %.1f)", loadedTracks[0].X1, loadedTracks[0].Y1, loadedTracks[0].X2, loadedTracks[0].Y2) } else { logln("  -> Nenhum trilho carregado.") }
-	g.tracks = loadedTracks; g.cameraOffsetX = 0; g.cameraOffsetY = 0
-	logf("Malha carregada e câmera resetada (X, Y): '%s' (%d trilhos)", loadPath, len(g.tracks))
-	return nil
-}
+	for i := len(g.elementos) - 1; i >= 0; i-- {
+		el := g.elementos[i]
+		var distToEdgeWorld float64 = math.MaxFloat64
 
-// pointSegmentDistance calcula a distância de um ponto a um segmento de linha.
-func pointSegmentDistance(px, py, ax, ay, bx, by float64) float64 { dx, dy := bx-ax, by-ay; lengthSq := dx*dx + dy*dy; if lengthSq == 0 { return math.Sqrt(math.Pow(px-ax, 2) + math.Pow(py-ay, 2)) }; t := ((px-ax)*dx + (py-ay)*dy) / lengthSq; t = math.Max(0, math.Min(1, t)); closestX := ax + t*dx; closestY := ay + t*dy; return math.Sqrt(math.Pow(px-closestX, 2) + math.Pow(py-closestY, 2)) }
-
-// findClosestTrack encontra o trilho mais próximo de um ponto no mundo.
-func (g *Game) findClosestTrack(worldX, worldY float64) int { closestIndex := -1; minDist := hitThreshold; for i := len(g.tracks) - 1; i >= 0; i-- { track := g.tracks[i]; dist := pointSegmentDistance(worldX, worldY, track.X1, track.Y1, track.X2, track.Y2); effectiveThreshold := hitThreshold + track.Thickness/2.0; if dist < minDist && dist < effectiveThreshold { minDist = dist; closestIndex = i } }; return closestIndex }
-
-// --- Métodos da Interface ebiten.Game ---
-
-// Update lida com a lógica do jogo a cada tick.
-func (g *Game) Update() error {
-	cursorX, cursorY := ebiten.CursorPosition()
-	worldCursorX, worldCursorY := g.screenToWorld(cursorX, cursorY)
-	popupClicked := false
-
-	// Atualiza índice do trilho sob o mouse (para tooltip) se popup não visível.
-	if !g.popupVisible { g.hoveredTrackIndex = g.findClosestTrack(worldCursorX, worldCursorY) } else { g.hoveredTrackIndex = -1 }
-
-	// Processa interação com o popup (se visível).
-	if g.popupVisible {
-		clickPoint := image.Pt(cursorX, cursorY); popupDrawX, popupDrawY := g.calculatePopupDrawPosition()
-		// Verifica clique esquerdo nas opções.
-		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
-			clickedOnOption := false
-			for _, option := range g.popupOptions { optionDrawRect := option.Rect.Add(image.Pt(popupDrawX-g.popupX, popupDrawY-g.popupY)); if clickPoint.In(optionDrawRect) { option.Action(); g.popupVisible = false; g.selectedTrackIndex = -1; popupClicked = true; clickedOnOption = true; break } }
-			if !clickedOnOption { g.popupVisible = false; g.selectedTrackIndex = -1; popupClicked = true } // Fecha se clicou fora.
+		switch el.Tipo {
+		case ElementoViaReta:
+			comprimentoWorldUnits := el.Comprimento * pixelsPerMeter
+			rad := el.Rotacao * math.Pi / 180.0
+			endX := el.X + comprimentoWorldUnits*math.Cos(rad)
+			endY := el.Y + comprimentoWorldUnits*math.Sin(rad)
+			distToCenterlineWorld := pointSegmentDistance(worldX, worldY, el.X, el.Y, endX, endY)
+			distToEdgeWorld = distToCenterlineWorld - (el.Espessura / 2.0)
+		case ElementoCircuitoVia:
+			vertBarLenWorld := el.Largura
+			horizStemLenWorld := el.Largura / 2.0
+			strokeWidthWorld := el.Espessura
+			vBarX1, vBarY1 := el.X, el.Y - vertBarLenWorld / 2.0
+			vBarX2, vBarY2 := el.X, el.Y + vertBarLenWorld / 2.0
+			distToVertBarCenterlineWorld := pointSegmentDistance(worldX, worldY, vBarX1, vBarY1, vBarX2, vBarY2)
+			hStemOriginX, hStemOriginY := el.X, el.Y
+			var hStemEndX, hStemEndY float64
+			if el.OrientacaoTC == "Invertido" {
+				hStemEndX, hStemEndY = el.X - horizStemLenWorld, el.Y
+			} else {
+				hStemEndX, hStemEndY = el.X + horizStemLenWorld, el.Y
+			}
+			distToHorizStemCenterlineWorld := pointSegmentDistance(worldX, worldY, hStemOriginX, hStemOriginY, hStemEndX, hStemEndY)
+			minDistToCenterlineWorld := math.Min(distToVertBarCenterlineWorld, distToHorizStemCenterlineWorld)
+			distToEdgeWorld = minDistToCenterlineWorld - (strokeWidthWorld / 2.0)
+		case ElementoChaveSimples:
+			raioWorld := el.Espessura
+			distToCenterWorld := math.Sqrt(math.Pow(worldX-el.X, 2) + math.Pow(worldY-el.Y, 2))
+			distToEdgeWorld = distToCenterWorld - raioWorld
 		}
-		// Verifica clique direito fora das opções para fechar.
-		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) {
-			inAnyOption := false
-			for _, option := range g.popupOptions { optionDrawRect := option.Rect.Add(image.Pt(popupDrawX-g.popupX, popupDrawY-g.popupY)); if clickPoint.In(optionDrawRect) { inAnyOption = true; break } }
-			if !inAnyOption { g.popupVisible = false; g.selectedTrackIndex = -1; popupClicked = true }
+		distToEdgeScreen := distToEdgeWorld * g.cameraZoom
+		if distToEdgeScreen < minDistScreen {
+			minDistScreen = distToEdgeScreen
+			closestIndex = i
 		}
 	}
+	return closestIndex
+}
 
-	// Processa outras interações se o clique não foi no popup.
-	if !popupClicked {
-		// Abrir popup com clique direito.
-		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) {
-			clickedIndex := g.findClosestTrack(worldCursorX, worldCursorY)
-			if clickedIndex != -1 { g.selectedTrackIndex = clickedIndex; g.popupVisible = true; g.popupX, g.popupY = cursorX, cursorY; g.generatePopupOptions(); g.hoveredTrackIndex = -1
-			} else { g.popupVisible = false; g.selectedTrackIndex = -1 }
-		}
-		// Lógica de desenho.
-		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) { g.startX, g.startY = worldCursorX, worldCursorY; g.drawing = true; g.popupVisible = false; g.selectedTrackIndex = -1; g.hoveredTrackIndex = -1 }
-		if inpututil.IsMouseButtonJustReleased(ebiten.MouseButtonLeft) && g.drawing { endWorldX, endWorldY := worldCursorX, worldCursorY; if !math.IsNaN(g.startX) && !math.IsNaN(g.startY) { distPx := math.Sqrt(math.Pow(endWorldX-g.startX, 2) + math.Pow(endWorldY-g.startY, 2)); if distPx > 1.0 { lengthM := calculateLengthMeters(g.startX, g.startY, endWorldX, endWorldY); if !math.IsNaN(lengthM) { g.tracks = append(g.tracks, Track{X1: g.startX, Y1: g.startY, X2: endWorldX, Y2: endWorldY, Color: g.currentColor, Thickness: g.thickness, LengthMeters: lengthM}) } else { logf("WARN: Comprimento NaN.") } } } else { logf("WARN: Finalizar sem start válido.") }; g.drawing = false; g.startX = math.NaN(); g.startY = math.NaN() }
+// --- Update ---
+func (g *Game) Update() error { if inpututil.IsKeyJustPressed(ebiten.KeyF1) { g.showHelp = !g.showHelp }; if g.showHelp && inpututil.IsKeyJustPressed(ebiten.KeyEscape) { g.showHelp = false; return nil }; popupClicked := false; if g.popupVisible { cursorX, cursorY := ebiten.CursorPosition(); clickPoint := image.Pt(cursorX, cursorY); popupDrawX, popupDrawY := g.calculatePopupDrawPosition(); if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) { clickedOnOption := false; for _, option := range g.popupOptions { optionDrawRect := option.Rect.Add(image.Pt(popupDrawX-g.popupX, popupDrawY-g.popupY)); if clickPoint.In(optionDrawRect) { option.Action(); g.popupVisible = false; popupClicked = true; clickedOnOption = true; break } }; if !clickedOnOption { g.popupVisible = false; popupClicked = true } }; if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) { g.popupVisible = false; popupClicked = true } }; if !g.showHelp && !popupClicked { cursorX, cursorY := ebiten.CursorPosition(); worldCursorX, worldCursorY := g.screenToWorld(cursorX, cursorY); if g.movingElementIndex == -1 && !g.drawingVia && !g.popupVisible { g.hoveredElementIndex = g.findClosestElement(worldCursorX, worldCursorY) } else { g.hoveredElementIndex = -1 }; _, wheelY := ebiten.Wheel(); if wheelY != 0 { worldMouseXBefore, worldMouseYBefore := g.screenToWorld(cursorX, cursorY); zoomFactor := 1.1; if wheelY < 0 { g.cameraZoom /= zoomFactor } else { g.cameraZoom *= zoomFactor }; g.cameraZoom = math.Max(minZoom, math.Min(g.cameraZoom, maxZoom)); worldMouseXAfter, worldMouseYAfter := g.screenToWorld(cursorX, cursorY); g.cameraOffsetX += (worldMouseXBefore - worldMouseXAfter); g.cameraOffsetY += (worldMouseYBefore - worldMouseYAfter) }; if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) && g.movingElementIndex == -1 { clickedIndex := g.findClosestElement(worldCursorX, worldCursorY); if clickedIndex != -1 { g.selectedElementIndex = clickedIndex; g.popupVisible = true; g.popupX, g.popupY = cursorX, cursorY; g.generatePopupOptions(); g.hoveredElementIndex = -1 } else { g.popupVisible = false } }; if inpututil.IsKeyJustPressed(ebiten.KeyT) { g.elementoAtualTipo = ElementoViaReta; logln("Sel: Via Reta") }; if inpututil.IsKeyJustPressed(ebiten.KeyK) { g.elementoAtualTipo = ElementoChaveSimples; logln("Sel: Chave Simples") }; if inpututil.IsKeyJustPressed(ebiten.KeyI) { g.elementoAtualTipo = ElementoCircuitoVia; logln("Sel: Circuito de Via") }; if inpututil.IsKeyJustPressed(ebiten.KeyV) { g.viaCheiaDefault = !g.viaCheiaDefault; logf("Próxima Via: %s", map[bool]string{true: "Cheia", false: "Vazada"}[g.viaCheiaDefault]) }; for key, clr := range g.colorPalette { if inpututil.IsKeyJustPressed(key) { if g.currentColor != clr { g.currentColor = clr; logf("Cor Padrão: %s", g.colorNames[key]) }; break } }; if inpututil.IsKeyJustPressed(ebiten.KeyF2) { g.backgroundColor = color.RGBA{R: 50, G: 50, B: 50, A: 255}; logln("Fundo: Cinza Escuro") }; if inpututil.IsKeyJustPressed(ebiten.KeyF3) { g.backgroundColor = color.RGBA{R: 100, G: 100, B: 120, A: 255}; logln("Fundo: Cinza Azulado") }; if inpututil.IsKeyJustPressed(ebiten.KeyF4) { g.backgroundColor = color.RGBA{R: 240, G: 240, B: 240, A: 255}; logln("Fundo: Branco Gelo") }; prevThickness := g.thickness; if inpututil.IsKeyJustPressed(ebiten.KeyEqual) || inpututil.IsKeyJustPressed(ebiten.KeyNumpadAdd) { g.thickness = math.Min(50, g.thickness+1.0) }; if inpututil.IsKeyJustPressed(ebiten.KeyMinus) || inpututil.IsKeyJustPressed(ebiten.KeyNumpadSubtract) { g.thickness = math.Max(1, g.thickness-1.0) }; if g.thickness != prevThickness { logf("Espessura ViaReta Padrão (mundo): %.1f", g.thickness) }; if inpututil.IsKeyJustPressed(ebiten.KeyC) { g.elementos = []Elemento{}; g.cameraOffsetX = 0; g.cameraOffsetY = 0; g.cameraZoom = 1.0; g.proximoElementoID = 1; g.popupVisible = false; g.selectedElementIndex = -1; g.movingElementIndex = -1; g.hoveredElementIndex = -1; logln("Malha limpa.") }; if inpututil.IsKeyJustPressed(ebiten.KeyS) { g.saveElements() }; if inpututil.IsKeyJustPressed(ebiten.KeyL) { g.loadElements() }; if inpututil.IsKeyJustPressed(ebiten.KeyEscape) { logln("Saindo."); return ebiten.Termination }; if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) { g.popupVisible = false; clickedExistingElementIndex := g.findClosestElement(worldCursorX, worldCursorY); if clickedExistingElementIndex != -1 { g.movingElementIndex = clickedExistingElementIndex; g.selectedElementIndex = clickedExistingElementIndex; el := g.elementos[g.movingElementIndex]; g.movingElementOffsetX = worldCursorX - el.X; g.movingElementOffsetY = worldCursorY - el.Y; g.drawingVia = false; logf("Movendo ID %d", el.ID) } else { g.selectedElementIndex = -1; g.movingElementIndex = -1; switch g.elementoAtualTipo { case ElementoViaReta: g.startX, g.startY = worldCursorX, worldCursorY; g.drawingVia = true; case ElementoCircuitoVia: novoEl := Elemento{Tipo:ElementoCircuitoVia,ID:g.proximoElementoID,X:worldCursorX,Y:worldCursorY,Largura:30,Cor:g.currentColor,Espessura:3,OrientacaoTC:"Normal"}; g.elementos=append(g.elementos,novoEl); g.proximoElementoID++; logf("Add Circ.Via ID %d (Vert.Bar:%.0f, Stroke:%.0f WU)",novoEl.ID, novoEl.Largura, novoEl.Espessura); case ElementoChaveSimples: novoEl := Elemento{Tipo:ElementoChaveSimples,ID:g.proximoElementoID,X:worldCursorX,Y:worldCursorY,Cor:g.currentColor,Espessura:10}; g.elementos=append(g.elementos,novoEl); g.proximoElementoID++; logf("Add Chave ID %d (R:%.0f WU)",novoEl.ID, novoEl.Espessura) } } }; if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) { if g.movingElementIndex != -1 { el := &g.elementos[g.movingElementIndex]; el.X = worldCursorX - g.movingElementOffsetX; el.Y = worldCursorY - g.movingElementOffsetY; g.selectedElementIndex = g.movingElementIndex; g.hoveredElementIndex = -1 } }; if inpututil.IsMouseButtonJustReleased(ebiten.MouseButtonLeft) { if g.movingElementIndex != -1 { el := g.elementos[g.movingElementIndex]; logf("ID %d movido (%.0f,%.0f)", el.ID, el.X, el.Y); g.selectedElementIndex = g.movingElementIndex; g.movingElementIndex = -1 } else if g.drawingVia { endWorldX, endWorldY := worldCursorX, worldCursorY; if !math.IsNaN(g.startX) && !math.IsNaN(g.startY) { worldPixelDist := math.Sqrt(math.Pow(endWorldX-g.startX,2)+math.Pow(endWorldY-g.startY,2)); if worldPixelDist*g.cameraZoom > 1.0 { lengthM := calculateLengthMeters(g.startX,g.startY,endWorldX,endWorldY); if !math.IsNaN(lengthM) { dx:=endWorldX-g.startX; dy:=endWorldY-g.startY; rot:=math.Atan2(dy,dx)*180/math.Pi; novoEl:=Elemento{Tipo:ElementoViaReta,ID:g.proximoElementoID,X:g.startX,Y:g.startY,Comprimento:lengthM,Rotacao:rot,Cor:g.currentColor,Espessura:g.thickness,ModoCheio:g.viaCheiaDefault}; g.elementos=append(g.elementos,novoEl); g.proximoElementoID++; logf("Add ViaReta ID %d (%.2fm, E:%.0f WU)", novoEl.ID, novoEl.Comprimento, novoEl.Espessura) } } }; g.drawingVia=false; g.startX=math.NaN(); g.startY=math.NaN(); g.selectedElementIndex=-1 } } }
+
+	currentCamScrollSpeed := cameraScrollSpeed / g.cameraZoom
+	if ebiten.IsKeyPressed(ebiten.KeyLeft) {
+		g.cameraOffsetX -= currentCamScrollSpeed
 	}
-
-	// Scroll da câmera.
-	if ebiten.IsKeyPressed(ebiten.KeyLeft) { g.cameraOffsetX -= cameraScrollSpeed }
-	if ebiten.IsKeyPressed(ebiten.KeyRight) { g.cameraOffsetX += cameraScrollSpeed }
-	if ebiten.IsKeyPressed(ebiten.KeyUp) { g.cameraOffsetY -= cameraScrollSpeed }
-	if ebiten.IsKeyPressed(ebiten.KeyDown) { g.cameraOffsetY += cameraScrollSpeed }
-
-	// Seleção de cor do trilho.
-	for key, clr := range g.colorPalette { if inpututil.IsKeyJustPressed(key) { if g.currentColor != clr { g.currentColor = clr; logf("Cor trilho: %s", g.colorNames[key]) }; break } }
-
-	// Seleção de cor de fundo.
-	if inpututil.IsKeyJustPressed(ebiten.KeyF1) { g.backgroundColor = color.RGBA{0, 0, 0, 255}; logln("Fundo: Preto") }
-	if inpututil.IsKeyJustPressed(ebiten.KeyF2) { g.backgroundColor = color.RGBA{50, 50, 50, 255}; logln("Fundo: Cinza Escuro") }
-	if inpututil.IsKeyJustPressed(ebiten.KeyF3) { g.backgroundColor = color.RGBA{100, 100, 120, 255}; logln("Fundo: Cinza Azulado") }
-	if inpututil.IsKeyJustPressed(ebiten.KeyF4) { g.backgroundColor = color.RGBA{240, 240, 240, 255}; logln("Fundo: Branco Gelo") }
-
-	// Ajuste de espessura.
-	prevThickness := g.thickness; if inpututil.IsKeyJustPressed(ebiten.KeyEqual) || inpututil.IsKeyJustPressed(ebiten.KeyNumpadAdd) { g.thickness += 1.0; if g.thickness > 50 { g.thickness = 50 } }; if inpututil.IsKeyJustPressed(ebiten.KeyMinus) || inpututil.IsKeyJustPressed(ebiten.KeyNumpadSubtract) { g.thickness -= 1.0; if g.thickness < 1 { g.thickness = 1 } }; if g.thickness != prevThickness { logf("Espessura: %.1f px", g.thickness) }
-
-	// Limpar.
-	if inpututil.IsKeyJustPressed(ebiten.KeyC) { g.tracks = []Track{}; g.cameraOffsetX = 0; g.cameraOffsetY = 0; g.popupVisible = false; g.selectedTrackIndex = -1; g.hoveredTrackIndex = -1; logln("Malha limpa.") }
-
-	// Salvar/Carregar.
-	if inpututil.IsKeyJustPressed(ebiten.KeyS) { g.saveTracks() }
-	if inpututil.IsKeyJustPressed(ebiten.KeyL) { g.loadTracks() }
-
-	// Sair.
-	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) { logln("Saindo."); return ebiten.Termination }
+	if ebiten.IsKeyPressed(ebiten.KeyRight) {
+		g.cameraOffsetX += currentCamScrollSpeed
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyUp) {
+		g.cameraOffsetY -= currentCamScrollSpeed
+	}
+	if ebiten.IsKeyPressed(ebiten.KeyDown) {
+		g.cameraOffsetY += currentCamScrollSpeed
+	}
 
 	return nil
 }
 
-// generatePopupOptions cria as opções (cor, apagar) para o menu popup.
+// generatePopupOptions & calculatePopupDrawPosition
 func (g *Game) generatePopupOptions() {
-	g.popupOptions = []PopupOption{} // Limpa as opções anteriores.
-	// Validação básica do índice selecionado.
-	if g.selectedTrackIndex < 0 || g.selectedTrackIndex >= len(g.tracks) { return }
-
-	// Define a ordem das teclas/cores no popup.
-	colorKeys := []ebiten.Key{ebiten.Key1, ebiten.Key2, ebiten.Key3, ebiten.Key4}
-	// Calcula a posição inicial para desenhar os quadrados de cor.
-	colorRowY := g.popupY + popupPadding
+	g.popupOptions = []PopupOption{}
+	if g.selectedElementIndex < 0 || g.selectedElementIndex >= len(g.elementos) {
+		g.popupVisible = false
+		return
+	}
+	currentPopupY := g.popupY + popupPadding
+	colorKeys := []ebiten.Key{ebiten.Key1, ebiten.Key2, ebiten.Key3, ebiten.Key4, ebiten.Key5}
 	colorStartX := g.popupX + popupPadding
-	squareSpacing := popupColorSquareSize + 5 // Espaço entre os quadrados.
-
-	// Cria uma opção para cada cor.
+	squareSpacing := popupColorSquareSize + 5
 	for i, key := range colorKeys {
-		optColor := g.colorPalette[key] // Pega a cor do mapa.
-		optIndex := g.selectedTrackIndex // Captura o índice *atual* para a closure.
-		// Define o retângulo relativo desta opção de cor.
-		optionRect := image.Rect(colorStartX+i*squareSpacing, colorRowY, colorStartX+i*squareSpacing+popupColorSquareSize, colorRowY+popupColorSquareSize)
-		// Adiciona a opção à lista.
+		optColor := g.colorPalette[key]
+		optionRect := image.Rect(colorStartX+i*squareSpacing, currentPopupY, colorStartX+i*squareSpacing+popupColorSquareSize, currentPopupY+popupColorSquareSize)
 		g.popupOptions = append(g.popupOptions, PopupOption{
-			Rect:  optionRect, // Área clicável.
-			Color: &optColor,  // Cor para desenhar o quadrado.
-			Action: func() {   // Função closure executada no clique.
-				// Verifica novamente se o índice ainda é válido (caso a lista tenha mudado).
-				if optIndex >= 0 && optIndex < len(g.tracks) {
-					g.tracks[optIndex].Color = optColor // Aplica a cor ao trilho selecionado.
-					logf("Cor do trilho %d -> %s", optIndex, g.colorNames[key])
-				} else { logf("WARN: Índice inválido %d ao mudar cor via popup", optIndex) }
-			},
+			Rect:  optionRect, Color: &optColor,
+			Action: func(capturedKey ebiten.Key, capturedColor color.RGBA) func() {
+				return func() {
+					idxToColor := g.selectedElementIndex
+					if idxToColor >= 0 && idxToColor < len(g.elementos) {
+						g.elementos[idxToColor].Cor = capturedColor
+						logf("Cor ID %d -> %s", g.elementos[idxToColor].ID, g.colorNames[capturedKey])
+					}
+				}
+			}(key, optColor),
 		})
 	}
+	currentPopupY += popupColorSquareSize + popupPadding
+	if g.elementos[g.selectedElementIndex].Tipo == ElementoCircuitoVia {
+		toggleOrientacaoRect := image.Rect(g.popupX+popupPadding, currentPopupY, g.popupX+popupWidth-popupPadding, currentPopupY+popupOptionHeight)
+		currentOrientationDisplay := g.elementos[g.selectedElementIndex].OrientacaoTC
+		if currentOrientationDisplay == "" { currentOrientationDisplay = "Normal (ト)" } else
+        if currentOrientationDisplay == "Normal" { currentOrientationDisplay = "Normal (ト)"} else
+        { currentOrientationDisplay = "Invert. (┤)"}
 
-	// Cria a opção "Apagar".
-	deleteRowY := colorRowY + popupColorSquareSize + popupPadding // Abaixo dos quadrados.
-	deleteRect := image.Rect(g.popupX+popupPadding, deleteRowY, g.popupX+popupWidth-popupPadding, deleteRowY+popupOptionHeight)
-	optIndex := g.selectedTrackIndex // Captura o índice atual para a closure.
+        labelText := fmt.Sprintf("Inverter (%s)", currentOrientationDisplay)
+		g.popupOptions = append(g.popupOptions, PopupOption{
+			Label: labelText, Rect:  toggleOrientacaoRect,
+			Action: func() {
+				idxToToggle := g.selectedElementIndex
+				if idxToToggle >= 0 && idxToToggle < len(g.elementos) {
+                    selEl := &g.elementos[idxToToggle]
+					if selEl.OrientacaoTC == "Normal" || selEl.OrientacaoTC == "" {
+						selEl.OrientacaoTC = "Invertido"
+					} else {
+						selEl.OrientacaoTC = "Normal"
+					}
+					logf("OrientacaoTC ID %d -> %s", selEl.ID, selEl.OrientacaoTC)
+				}
+			},
+		})
+		currentPopupY += popupOptionHeight + popupPadding
+	}
+	deleteRect := image.Rect(g.popupX+popupPadding, currentPopupY, g.popupX+popupWidth-popupPadding, currentPopupY+popupOptionHeight)
 	g.popupOptions = append(g.popupOptions, PopupOption{
-		Label: "Apagar", // Texto do botão.
-		Rect:  deleteRect,
-		Action: func() { // Ação de apagar.
-			if optIndex >= 0 && optIndex < len(g.tracks) { // Verifica validade.
-				logf("Apagando trilho %d", optIndex)
-				// Remove o elemento da slice g.tracks.
-				g.tracks = append(g.tracks[:optIndex], g.tracks[optIndex+1:]...)
-				g.selectedTrackIndex = -1 // Reseta a seleção após apagar.
-			} else { logf("WARN: Índice inválido %d ao apagar via popup", optIndex) }
+		Label: "Apagar", Rect:  deleteRect,
+		Action: func() {
+			idxToDelete := g.selectedElementIndex
+			if idxToDelete >= 0 && idxToDelete < len(g.elementos) {
+				elID := g.elementos[idxToDelete].ID; elType := g.elementos[idxToDelete].Tipo
+				logf("Apagando ID %d (Tipo: %v)", elID, elType)
+				g.elementos = append(g.elementos[:idxToDelete], g.elementos[idxToDelete+1:]...)
+				g.selectedElementIndex = -1; g.hoveredElementIndex = -1; g.movingElementIndex = -1
+			}
 		},
 	})
+	if len(g.popupOptions) == 0 { g.popupVisible = false }
 }
 
-// calculatePopupDrawPosition ajusta a posição de desenho do popup para caber na tela.
-func (g *Game) calculatePopupDrawPosition() (int, int) {
-	// Calcula altura baseada nas opções geradas.
-	popupHeight := 0
-	if len(g.popupOptions) > 0 { maxY := 0; for _, opt := range g.popupOptions { if opt.Rect.Max.Y > maxY { maxY = opt.Rect.Max.Y } }; popupHeight = (maxY - g.popupY) + popupPadding } else { popupHeight = popupPadding*2 + popupColorSquareSize + popupOptionHeight + popupPadding }
+func (g *Game) calculatePopupDrawPosition() (int, int) { popupHeight := 0; if len(g.popupOptions) > 0 { maxY := 0; for _, opt := range g.popupOptions { if opt.Rect.Max.Y > maxY { maxY = opt.Rect.Max.Y } }; popupHeight = (maxY - g.popupY) + popupPadding } else { popupHeight = popupPadding*2 + popupColorSquareSize + popupOptionHeight + popupPadding }; drawPopupX := g.popupX; drawPopupY := g.popupY; if drawPopupX+popupWidth > g.screenWidth { drawPopupX = g.screenWidth - popupWidth }; if drawPopupY+popupHeight > g.screenHeight { drawPopupY = g.screenHeight - popupHeight }; if drawPopupX < 0 { drawPopupX = 0 }; if drawPopupY < 0 { drawPopupY = 0 }; return drawPopupX, drawPopupY }
 
-	// Começa na posição original do clique.
-	drawPopupX := g.popupX; drawPopupY := g.popupY
-	// Ajusta para não sair das bordas.
-	if drawPopupX+popupWidth > g.screenWidth { drawPopupX = g.screenWidth - popupWidth }; if drawPopupY+popupHeight > g.screenHeight { drawPopupY = g.screenHeight - popupHeight }; if drawPopupX < 0 { drawPopupX = 0 }; if drawPopupY < 0 { drawPopupY = 0 }
-	return drawPopupX, drawPopupY // Retorna posição ajustada.
-}
+// --- Texto da Ajuda ---
+const helpText = ` = = = AJUDA (Pressione F1 ou ESC para fechar) = = =
 
-// drawNode desenha um nó circular com contorno.
-func drawNode(screen *ebiten.Image, x, y, radius, strokeWidth float32, fillColor, outlineColor color.Color) {
-	if radius <= 0 { return } // Segurança.
-	vector.DrawFilledCircle(screen, x, y, radius, fillColor, true) // Desenha preenchimento.
-	if strokeWidth > 0 { vector.StrokeCircle(screen, x, y, radius, strokeWidth, outlineColor, true) } // Desenha contorno.
-}
+SELECAO DE ELEMENTO (Adicao):
+ T: Via Reta | I: Circ. Via | K: Chave Simples
 
-// Draw desenha toda a cena na tela a cada frame.
+ADICIONAR:
+ - Via Reta: Clique esquerdo em area vazia, arraste e solte.
+             Comprimento em metros, Bitola em Unid. Mundo.
+ - Outros: Clique esquerdo em area vazia para posicionar.
+   - Circ. Via: Desenha um símbolo ト (ou ┤ se invertido).
+                Comprimento da barra vertical e espessura do traço
+                em Unid. Mundo. Barra horizontal = 1/2 da vertical.
+                (Padrão: Barra Vert. L=30, Traço E=3 Unid. Mundo)
+   - Chave Simples: Desenha um circulo.
+                    Raio em Unid. Mundo.
+                    (Padrão: Raio R=10 Unid. Mundo)
+
+MOVER ELEMENTO:
+ - Clique esquerdo sobre um elemento e arraste.
+
+EDITAR/APAGAR ELEMENTOS:
+ - Clique Direito sobre um elemento para abrir menu.
+   (Mudar cor, Inverter Orientacao ト/┤ para Circ.Via, Apagar)
+ - Clique Esquerdo nas opcoes do menu.
+
+NAVEGACAO:
+ Setas Cima/Baixo/Esquerda/Direita: Mover Camera (Pan)
+ Roda do Mouse: Zoom In/Out (centrado no cursor)
+
+VIA RETA (Proximo a ser adicionado):
+ 1-5: Mudar Cor Padrao
+ +, - (Numpad): Aumentar/Diminuir Bitola Padrao (Unid. Mundo)
+ V: Alternar Modo Padra1o (Cheia / Vazada)
+
+COR DE FUNDO: F2: Cinza Escuro | F3: Cinza Azulado | F4: Branco Gelo
+ARQUIVO: S: Salvar | L: Carregar | C: Limpar Tudo
+SAIR: ESC: Fechar Ajuda / Sair do Programa
+`
+
+// --- Funções de Desenho ---
 func (g *Game) Draw(screen *ebiten.Image) {
-	if screen == nil || g.whitePixel == nil { logln("ERRO CRÍTICO: screen/whitePixel nil"); return }
-	screen.Fill(g.backgroundColor) // Limpa com a cor de fundo.
-
-	totalLengthMeters := 0.0
+	if screen == nil || g.whitePixel == nil { logln("ERRO CRITICO: screen/whitePixel nil"); return }
+	screen.Fill(g.backgroundColor)
 	cursorX, cursorY := ebiten.CursorPosition()
 
-	// 1. Desenhar Trilhos e Nós existentes.
-	for i, track := range g.tracks {
-		if !math.IsNaN(track.LengthMeters) { totalLengthMeters += track.LengthMeters }
-		screenX1, screenY1 := g.worldToScreen(track.X1, track.Y1); screenX2, screenY2 := g.worldToScreen(track.X2, track.Y2)
+	for i, el := range g.elementos {
+		var drawColor color.RGBA
+		isMoving := (i == g.movingElementIndex); isSelectedPopup := (g.popupVisible && i == g.selectedElementIndex && !isMoving)
+		isHovered := (i == g.hoveredElementIndex && !isMoving && !isSelectedPopup && !g.drawingVia && !g.popupVisible)
+		if isMoving { drawColor = color.RGBA{R: 255, G: 165, B: 0, A: 255} } else if isSelectedPopup { drawColor = color.RGBA{R: 255, G: 255, B: 255, A: 255}
+		} else if isHovered { r, gr, b, a := el.Cor.RGBA(); drawColor = color.RGBA{uint8(math.Min(255, float64(r>>8)+60)), uint8(math.Min(255, float64(gr>>8)+60)), uint8(math.Min(255, float64(b>>8)+60)), uint8(a >> 8)}
+		} else { drawColor = el.Cor }
+		
+		screenDrawSizeElement := float32(el.Espessura * g.cameraZoom) 
+		currentRailStrokeWidthOnScreen := float32(railStrokeWidth * g.cameraZoom)
+		if currentRailStrokeWidthOnScreen < 0.5 { currentRailStrokeWidthOnScreen = 0.5 }
 
-		// Define as cores (normal ou destaque).
-		lineDrawColor := track.Color; nodeFillColor := track.Color; nodeOutlineColor := color.White
-		if g.popupVisible && i == g.selectedTrackIndex { lineDrawColor = color.RGBA{255, 255, 255, 255}; nodeFillColor = color.RGBA{255, 255, 255, 255}; nodeOutlineColor = color.Black }
+		switch el.Tipo {
+		case ElementoViaReta:
+			worldUnitsLength := el.Comprimento * pixelsPerMeter
+			rad := el.Rotacao * math.Pi / 180.0
+			endWorldX := el.X + worldUnitsLength*math.Cos(rad); endWorldY := el.Y + worldUnitsLength*math.Sin(rad)
+			screenX1, screenY1 := g.worldToScreen(el.X, el.Y); screenX2, screenY2 := g.worldToScreen(endWorldX, endWorldY)
+			
+			screenElGauge := float32(el.Espessura * g.cameraZoom)
+			if screenElGauge < 1.0 { screenElGauge = 1.0 } 
+			halfScreenGauge := screenElGauge / 2.0
+			if halfScreenGauge < 0.5 { halfScreenGauge = 0.5 }
 
-		// Desenha a linha.
-		drawThickLine(screen, g.whitePixel, screenX1, screenY1, screenX2, screenY2, float32(track.Thickness), lineDrawColor, "track")
-		// Desenha os nós nas pontas.
-		nodeRadius := float32(track.Thickness*nodeRadiusFactor / 2.0); if nodeRadius < 2.0 { nodeRadius = 2.0 }
-		drawNode(screen, screenX1, screenY1, nodeRadius, nodeOutlineWidth, nodeFillColor, nodeOutlineColor)
-		drawNode(screen, screenX2, screenY2, nodeRadius, nodeOutlineWidth, nodeFillColor, nodeOutlineColor)
+			limitY1_upper := screenY1 - halfScreenGauge
+			limitY1_lower := screenY1 + halfScreenGauge
+			limitY2_upper := screenY2 - halfScreenGauge
+			limitY2_lower := screenY2 + halfScreenGauge
+
+			if el.ModoCheio { 
+				vertices := []ebiten.Vertex{
+					{DstX: screenX1, DstY: limitY1_upper, SrcX: 0, SrcY: 0},
+					{DstX: screenX1, DstY: limitY1_lower, SrcX: 0, SrcY: 0},
+					{DstX: screenX2, DstY: limitY2_lower, SrcX: 0, SrcY: 0},
+					{DstX: screenX2, DstY: limitY2_upper, SrcX: 0, SrcY: 0},
+				}
+				r, gVal, b, a := drawColor.RGBA()
+				colorR, colorG, colorB, colorA := float32(r)/65535.0, float32(gVal)/65535.0, float32(b)/65535.0, float32(a)/65535.0
+				for i := range vertices {
+					vertices[i].ColorR = colorR; vertices[i].ColorG = colorG; vertices[i].ColorB = colorB; vertices[i].ColorA = colorA
+				}
+				indices := []uint16{0, 1, 2, 0, 2, 3} 
+				op := &ebiten.DrawTrianglesOptions{AntiAlias: true}
+				screen.DrawTriangles(vertices, indices, g.whitePixel, op)
+
+			} else { 
+				vector.StrokeLine(screen, screenX1, limitY1_upper, screenX2, limitY2_upper, currentRailStrokeWidthOnScreen, drawColor, true)
+				vector.StrokeLine(screen, screenX1, limitY1_lower, screenX2, limitY2_lower, currentRailStrokeWidthOnScreen, drawColor, true)
+				vector.StrokeLine(screen, screenX1, limitY1_upper, screenX1, limitY1_lower, currentRailStrokeWidthOnScreen, drawColor, true)
+				vector.StrokeLine(screen, screenX2, limitY2_upper, screenX2, limitY2_lower, currentRailStrokeWidthOnScreen, drawColor, true)
+			}
+
+		case ElementoCircuitoVia:
+			screenX, screenY := g.worldToScreen(el.X, el.Y)
+			screenVertBarLen := float32(el.Largura * g.cameraZoom)
+			screenHorizStemLen := screenVertBarLen / 2.0
+			screenStrokeWidthCV := screenDrawSizeElement 
+			if screenStrokeWidthCV < 0.5 { screenStrokeWidthCV = 0.5 }
+			
+			vBarX1 := screenX; vBarY1 := screenY - screenVertBarLen/2.0
+			vBarX2 := screenX; vBarY2 := screenY + screenVertBarLen/2.0
+			vector.StrokeLine(screen, vBarX1, vBarY1, vBarX2, vBarY2, screenStrokeWidthCV, drawColor, true)
+			
+			hStemOriginX := screenX; hStemOriginY := screenY
+			var hStemEndX, hStemEndY float32
+			if el.OrientacaoTC == "Invertido" {
+				hStemEndX = screenX - screenHorizStemLen; hStemEndY = screenY
+			} else {
+				hStemEndX = screenX + screenHorizStemLen; hStemEndY = screenY
+			}
+			vector.StrokeLine(screen, hStemOriginX, hStemOriginY, hStemEndX, hStemEndY, screenStrokeWidthCV, drawColor, true)
+		case ElementoChaveSimples:
+			screenX, screenY := g.worldToScreen(el.X, el.Y)
+			screenRaio := screenDrawSizeElement 
+			if screenRaio < 1.0 { screenRaio = 1.0 }
+			vector.DrawFilledCircle(screen, screenX, screenY, screenRaio, drawColor, true)
+		}
 	}
 
-	// 2. Desenhar Linha em Progresso e Nós temporários (se estiver desenhando).
-	currentDrawingLengthMeters := 0.0
-	if g.drawing && !math.IsNaN(g.startX) && !math.IsNaN(g.startY) {
-		currentWorldX, currentWorldY := g.screenToWorld(cursorX, cursorY); currentDrawingLengthMeters = calculateLengthMeters(g.startX, g.startY, currentWorldX, currentWorldY)
+	if g.drawingVia && !math.IsNaN(g.startX) && !math.IsNaN(g.startY) {
 		startScreenX, startScreenY := g.worldToScreen(g.startX, g.startY)
-		// Desenha a linha.
-		drawThickLine(screen, g.whitePixel, startScreenX, startScreenY, float32(cursorX), float32(cursorY), float32(g.thickness), g.currentColor, "drawing-live")
-		// Desenha os nós temporários.
-		nodeRadius := float32(g.thickness*nodeRadiusFactor / 2.0); if nodeRadius < 2.0 { nodeRadius = 2.0 }
-		nodeFillColor := g.currentColor; nodeOutlineColor := color.White
-		drawNode(screen, startScreenX, startScreenY, nodeRadius, nodeOutlineWidth, nodeFillColor, nodeOutlineColor)
-		drawNode(screen, float32(cursorX), float32(cursorY), nodeRadius, nodeOutlineWidth, nodeFillColor, nodeOutlineColor)
+		endScreenX, endScreenY := float32(cursorX), float32(cursorY)
+		
+		screenThicknessTemp := float32(g.thickness * g.cameraZoom)
+		if screenThicknessTemp < 1.0 { screenThicknessTemp = 1.0 }
+		halfScreenGaugeDrawing := screenThicknessTemp / 2.0
+		if halfScreenGaugeDrawing < 0.5 { halfScreenGaugeDrawing = 0.5 }
+
+		currentRailStrokeWidthOnScreenTemp := float32(railStrokeWidth * g.cameraZoom)
+		if currentRailStrokeWidthOnScreenTemp < 0.5 { currentRailStrokeWidthOnScreenTemp = 0.5 }
+		
+		limitY1_upper_draw := startScreenY - halfScreenGaugeDrawing
+		limitY1_lower_draw := startScreenY + halfScreenGaugeDrawing
+		limitY2_upper_draw := endScreenY - halfScreenGaugeDrawing
+		limitY2_lower_draw := endScreenY + halfScreenGaugeDrawing
+
+		if g.viaCheiaDefault { 
+			vertices := []ebiten.Vertex{
+				{DstX: startScreenX, DstY: limitY1_upper_draw, SrcX: 0, SrcY: 0},
+				{DstX: startScreenX, DstY: limitY1_lower_draw, SrcX: 0, SrcY: 0},
+				{DstX: endScreenX,   DstY: limitY2_lower_draw, SrcX: 0, SrcY: 0},
+				{DstX: endScreenX,   DstY: limitY2_upper_draw, SrcX: 0, SrcY: 0},
+			}
+			r, gVal, b, a := g.currentColor.RGBA()
+			colorR, colorG, colorB, colorA := float32(r)/65535.0, float32(gVal)/65535.0, float32(b)/65535.0, float32(a)/65535.0
+			for i := range vertices {
+				vertices[i].ColorR = colorR; vertices[i].ColorG = colorG; vertices[i].ColorB = colorB; vertices[i].ColorA = colorA
+			}
+			indices := []uint16{0, 1, 2, 0, 2, 3}
+			op := &ebiten.DrawTrianglesOptions{AntiAlias: true}
+			screen.DrawTriangles(vertices, indices, g.whitePixel, op)
+		} else { 
+			vector.StrokeLine(screen, startScreenX, limitY1_upper_draw, endScreenX, limitY2_upper_draw, currentRailStrokeWidthOnScreenTemp, g.currentColor, true)
+			vector.StrokeLine(screen, startScreenX, limitY1_lower_draw, endScreenX, limitY2_lower_draw, currentRailStrokeWidthOnScreenTemp, g.currentColor, true)
+			vector.StrokeLine(screen, startScreenX, limitY1_upper_draw, startScreenX, limitY1_lower_draw, currentRailStrokeWidthOnScreenTemp, g.currentColor, true)
+			vector.StrokeLine(screen, endScreenX,   limitY2_upper_draw, endScreenX,   limitY2_lower_draw, currentRailStrokeWidthOnScreenTemp, g.currentColor, true)
+		}
 	}
 
-	// 3. Desenhar Popup (se visível).
-	if g.popupVisible {
-		drawPopupX, drawPopupY := g.calculatePopupDrawPosition() // Pega posição ajustada.
-		// Calcula altura para o fundo.
-		popupDrawHeight := 0; if len(g.popupOptions) > 0 { maxYRel := 0; for _, opt := range g.popupOptions { relY := opt.Rect.Max.Y - g.popupY; if relY > maxYRel { maxYRel = relY } }; popupDrawHeight = maxYRel + popupPadding }
-		// Desenha fundo.
-		if popupDrawHeight > 0 { vector.DrawFilledRect(screen, float32(drawPopupX), float32(drawPopupY), float32(popupWidth), float32(popupDrawHeight), color.RGBA{50, 50, 50, 220}, false) }
-		// Calcula deslocamento para desenhar opções.
-		offsetX := drawPopupX - g.popupX; offsetY := drawPopupY - g.popupY
-		// Desenha cada opção.
-		for _, option := range g.popupOptions { optionDrawRect := option.Rect.Add(image.Pt(offsetX, offsetY)); if option.Color != nil { vector.DrawFilledRect(screen, float32(optionDrawRect.Min.X), float32(optionDrawRect.Min.Y), float32(optionDrawRect.Dx()), float32(optionDrawRect.Dy()), *option.Color, false); vector.StrokeRect(screen, float32(optionDrawRect.Min.X), float32(optionDrawRect.Min.Y), float32(optionDrawRect.Dx()), float32(optionDrawRect.Dy()), 1, color.White, false) }; if option.Label != "" { textBounds := text.BoundString(basicfont.Face7x13, option.Label); textX := optionDrawRect.Min.X + (optionDrawRect.Dx()-textBounds.Dx())/2; textY := optionDrawRect.Min.Y + (optionDrawRect.Dy()+textBounds.Dy())/2 - 2; text.Draw(screen, option.Label, basicfont.Face7x13, textX, textY, color.White) } }
-	}
+	if g.popupVisible { drawPopupX, drawPopupY := g.calculatePopupDrawPosition(); popupDrawHeight := 0; if len(g.popupOptions) > 0 { maxYRel := 0; for _, opt := range g.popupOptions { relY := opt.Rect.Max.Y - g.popupY; if relY > maxYRel { maxYRel = relY } }; popupDrawHeight = maxYRel + popupPadding }; if popupDrawHeight > 0 { vector.DrawFilledRect(screen, float32(drawPopupX), float32(drawPopupY), float32(popupWidth), float32(popupDrawHeight), color.RGBA{R:50,G:50,B:50,A:220}, false) }; offsetX := drawPopupX - g.popupX; offsetY := drawPopupY - g.popupY; for _, option := range g.popupOptions { optionDrawRect := option.Rect.Add(image.Pt(offsetX, offsetY)); if option.Color != nil { vector.DrawFilledRect(screen, float32(optionDrawRect.Min.X), float32(optionDrawRect.Min.Y), float32(optionDrawRect.Dx()), float32(optionDrawRect.Dy()), *option.Color, false); vector.StrokeRect(screen, float32(optionDrawRect.Min.X), float32(optionDrawRect.Min.Y), float32(optionDrawRect.Dx()), float32(optionDrawRect.Dy()), 1, color.White, false) }; if option.Label != "" { tb := text.BoundString(basicfont.Face7x13, option.Label); tx := optionDrawRect.Min.X + (optionDrawRect.Dx()-tb.Dx())/2; ty := optionDrawRect.Min.Y + (optionDrawRect.Dy()+tb.Dy())/2 - 2; text.Draw(screen, option.Label, basicfont.Face7x13, tx, ty, color.White) } } }
 
-	// 4. Desenhar Tooltip (se houver trilho sob o mouse e popup/desenho inativos).
-	if g.hoveredTrackIndex != -1 && g.hoveredTrackIndex < len(g.tracks) && !g.popupVisible && !g.drawing {
-		hoveredTrack := g.tracks[g.hoveredTrackIndex]; tooltipText := fmt.Sprintf("%.0f m", hoveredTrack.LengthMeters)
-		textBounds := text.BoundString(basicfont.Face7x13, tooltipText); tooltipW := textBounds.Dx() + tooltipPadding*2; tooltipH := 13 + tooltipPadding*2
-		tooltipX := cursorX + 10; tooltipY := cursorY + 15 // Posição inicial.
-		// Ajusta para caber na tela.
-		if tooltipX+tooltipW > g.screenWidth { tooltipX = g.screenWidth - tooltipW }; if tooltipY+tooltipH > g.screenHeight { tooltipY = g.screenHeight - tooltipH }; if tooltipX < 0 { tooltipX = 0 }; if tooltipY < 0 { tooltipY = 0 }
-		// Desenha fundo e texto.
-		vector.DrawFilledRect(screen, float32(tooltipX), float32(tooltipY), float32(tooltipW), float32(tooltipH), color.RGBA{30, 30, 30, 200}, false)
-		text.Draw(screen, tooltipText, basicfont.Face7x13, tooltipX+tooltipPadding, tooltipY+tooltipPadding+10, color.White)
+	elementTypeStr := ""
+	switch g.elementoAtualTipo {
+	case ElementoViaReta: elementTypeStr = "Via Reta[T]"
+	case ElementoCircuitoVia: elementTypeStr = "Circ.Via[I]"
+	case ElementoChaveSimples: elementTypeStr = "Chave[K]"
+	default: elementTypeStr = "Desconhecido"
 	}
+	viaModeStr:="Vazada"; if g.viaCheiaDefault{viaModeStr="Cheia"}
+	metersPerScreenPixel := (1.0/pixelsPerMeter)/g.cameraZoom
+	statusText := fmt.Sprintf("Cam:%.0f,%.0f(Z:%.2fx)|Esc:1px=%.1fm|Tipo:%s|Via[V]:%s\nFundo[F2-4]|Scroll[Setas]|+/-:BitolaVR(%.0f WU)|S/L:Arq|C:Limpar|ESC:Sair",g.cameraOffsetX,g.cameraOffsetY,g.cameraZoom,metersPerScreenPixel,elementTypeStr,viaModeStr,g.thickness)
+	ebitenutil.DebugPrint(screen,statusText)
 
-	// 5. Info na Tela (DebugPrint por último para ficar por cima).
-	trilhoColorHelp := "Trilho [1:R 2:B 3:Y 4:G]"; bgColorHelp := "Fundo [F1-F4]"; scrollHelp := "Scroll [Setas]"; saveLoadHelp := "Salvar [S] | Carregar [L]"
-	statusText := fmt.Sprintf("Comp:%.0fm|Cam:%.0f,%.0f|Esc:1px=%.0fm\n%s|%s|+/-:Esp(%.0fpx)\nArrastar|%s|%s|C:Limpar|ESC:Sair", totalLengthMeters, g.cameraOffsetX, g.cameraOffsetY, 1.0/pixelsPerMeter, trilhoColorHelp, bgColorHelp, g.thickness, scrollHelp, saveLoadHelp)
-	if g.drawing && currentDrawingLengthMeters > 0 && !math.IsNaN(currentDrawingLengthMeters) { statusText += fmt.Sprintf("|Atual:%.0fm", currentDrawingLengthMeters) }
-	ebitenutil.DebugPrint(screen, statusText)
+	if g.showHelp { vector.DrawFilledRect(screen,0,0,float32(g.screenWidth),float32(g.screenHeight),color.RGBA{R:0,G:0,B:0,A:200},false); text.Draw(screen,helpText,basicfont.Face7x13,20,20,color.White) }
 }
 
-// Layout define o tamanho lógico da tela.
+// Layout
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	// Atualiza as dimensões internas para a lógica de UI (popup/tooltip).
+	logf("Layout START: oldW=%d, oldH=%d, newW=%d, newH=%d", g.screenWidth, g.screenHeight, outsideWidth, outsideHeight)
+	logf("Layout START: oldCamX=%.2f, oldCamY=%.2f", g.cameraOffsetX, g.cameraOffsetY)
+
 	g.screenWidth = outsideWidth
 	g.screenHeight = outsideHeight
+
+	logf("Layout END: newW=%d, newH=%d. CamX e CamY NÃO foram alterados: newCamX=%.2f, newCamY=%.2f", g.screenWidth, g.screenHeight, g.cameraOffsetX, g.cameraOffsetY)
 	return g.screenWidth, g.screenHeight
 }
 
-// drawThickLine desenha uma linha grossa como um retângulo feito de triângulos.
-// Recebe coordenadas da TELA.
-func drawThickLine(screen *ebiten.Image, whitePixel *ebiten.Image, x1, y1, x2, y2, thickness float32, clr color.Color, id string) {
+// drawThickLine (usada para desenhar um retângulo rotacionado que segue o ângulo exato da linha)
+// Não é mais usada para ViaReta Cheia neste momento, mas mantida para referência ou outros usos.
+func drawThickLine(screen *ebiten.Image, whitePixel *ebiten.Image, x1, y1, x2, y2, screenThickness float32, clr color.Color, id string) {
 	if screen == nil || whitePixel == nil { logf("ERRO (%s): screen/whitePixel nil", id); return }
-	if thickness < 1 { thickness = 1 }
-	dx := x2 - x1; dy := y2 - y1; lengthSq := dx*dx + dy*dy
-	if lengthSq < 0.01 { return } // Linha muito curta.
-	length := float32(math.Sqrt(float64(lengthSq)))
-	nx := dx / length; ny := dy / length // Vetor normalizado.
-	if math.IsNaN(float64(nx)) || math.IsNaN(float64(ny)) || math.IsInf(float64(nx), 0) || math.IsInf(float64(ny), 0) { logf("ERRO (%s): NaN/Inf norm vec", id); return }
-	halfThick := thickness / 2.0; px := -ny * halfThick; py := nx * halfThick // Vetor perpendicular.
-	// Vértices do retângulo.
-	v1x, v1y := x1+px, y1+py; v2x, v2y := x1-px, y1-py; v3x, v3y := x2-px, y2-py; v4x, v4y := x2+px, y2+py
-	// Validação dos vértices.
-	coords := []float32{v1x, v1y, v2x, v2y, v3x, v3y, v4x, v4y}; for i, val := range coords { if math.IsNaN(float64(val)) || math.IsInf(float64(val), 0) { logf("ERRO (%s): NaN/Inf vert coord [%d]", id, i); return } }
-	// Cor para float32.
-	r, gVal, b, a := clr.RGBA(); colorR, colorG, colorB, colorA := float32(r)/65535.0, float32(gVal)/65535.0, float32(b)/65535.0, float32(a)/65535.0
-	// Definição dos vértices Ebiten (usando textura 1x1).
-	vertices := []ebiten.Vertex{ {DstX: v1x, DstY: v1y, SrcX: 0, SrcY: 0, ColorR: colorR, ColorG: colorG, ColorB: colorB, ColorA: colorA}, {DstX: v2x, DstY: v2y, SrcX: 0, SrcY: 0, ColorR: colorR, ColorG: colorG, ColorB: colorB, ColorA: colorA}, {DstX: v3x, DstY: v3y, SrcX: 0, SrcY: 0, ColorR: colorR, ColorG: colorG, ColorB: colorB, ColorA: colorA}, {DstX: v4x, DstY: v4y, SrcX: 0, SrcY: 0, ColorR: colorR, ColorG: colorG, ColorB: colorB, ColorA: colorA}, }
-	indices := []uint16{0, 1, 2, 0, 2, 3} // Índices dos triângulos.
-	op := &ebiten.DrawTrianglesOptions{AntiAlias: true} // Habilita suavização.
-	// Desenha na tela.
-	screen.DrawTriangles(vertices, indices, whitePixel, op)
+	if screenThickness < 0.5 { screenThickness = 0.5 }
+	dx := x2 - x1; dy := y2 - y1
+	lengthF64 := math.Sqrt(float64(dx*dx) + float64(dy*dy))
+	if lengthF64 == 0 { return }
+
+	angle := math.Atan2(float64(dy), float64(dx))
+	cosAngle := float32(math.Cos(angle))
+	sinAngle := float32(math.Sin(angle))
+
+	halfThick := screenThickness / 2.0
+	
+	offsetX := halfThick * sinAngle 
+	offsetY := halfThick * cosAngle
+
+	v0x := x1 - offsetX; v0y := y1 + offsetY
+	v1x := x1 + offsetX; v1y := y1 - offsetY
+	v2x := x2 + offsetX; v2y := y2 - offsetY
+	v3x := x2 - offsetX; v3y := y2 + offsetY
+
+	coords := []float32{v0x, v0y, v1x, v1y, v2x, v2y, v3x, v3y}
+	for i, val := range coords { if math.IsNaN(float64(val)) || math.IsInf(float64(val), 0) { logf("ERRO (%s): Vértice NaN/Inf [%d]", id, i); return } }
+	r, gVal, b, a := clr.RGBA(); colorR,colorG,colorB,colorA := float32(r)/65535.0, float32(gVal)/65535.0, float32(b)/65535.0, float32(a)/65535.0
+	vertices := []ebiten.Vertex{
+		{DstX: v0x, DstY: v0y, SrcX:0,SrcY:0, ColorR:colorR,ColorG:colorG,ColorB:colorB,ColorA:colorA},
+		{DstX: v1x, DstY: v1y, SrcX:0,SrcY:0, ColorR:colorR,ColorG:colorG,ColorB:colorB,ColorA:colorA},
+		{DstX: v2x, DstY: v2y, SrcX:0,SrcY:0, ColorR:colorR,ColorG:colorG,ColorB:colorB,ColorA:colorA},
+		{DstX: v3x, DstY: v3y, SrcX:0,SrcY:0, ColorR:colorR,ColorG:colorG,ColorB:colorB,ColorA:colorA},
+	}
+	indices := []uint16{0, 1, 2, 0, 2, 3}
+	op := &ebiten.DrawTrianglesOptions{AntiAlias: true}; screen.DrawTriangles(vertices, indices, whitePixel, op)
 }
 
-// --- Função Principal ---
-
-// main configura e inicia o jogo.
+// main
 func main() {
-	gameInstance := NewGame() // Cria a instância do jogo.
-	ebiten.SetWindowSize(gameInstance.screenWidth, gameInstance.screenHeight) // Define tamanho inicial.
-	ebiten.SetWindowTitle("Malha Ferroviária Interativa (v8.4 - Documentado)") // Define título.
-	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled) // Permite redimensionar.
-	logln("Iniciando loop...") // Mensagem de início.
-	// Roda o jogo. Bloqueia até fechar.
+	gameInstance := NewGame()
+	ebiten.SetWindowSize(gameInstance.screenWidth, gameInstance.screenHeight)
+	ebiten.SetWindowTitle("Editor de Vias (v9.17.10 - Tampas Verticais para Via Cheia e Vazada)") // Version increment
+	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
+	logln("Iniciando loop...")
 	if err := ebiten.RunGame(gameInstance); err != nil {
-		if err != ebiten.Termination { // Se não for um fechamento normal...
-			logf("Erro fatal: %v", err) // ...loga o erro.
-		} else {
-			logln("Aplicativo terminado.") // Loga término normal.
-		}
+		if err != ebiten.Termination { logf("Erro fatal: %v", err) } else { logln("Jogo terminado.") }
 	}
-	logln("==== Fim ====") // Mensagem final.
+	logln("==== Fim ====")
 }
